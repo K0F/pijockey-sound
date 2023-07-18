@@ -8,7 +8,10 @@ https://bitbucket.org/sharow/pijockey
 
 
 # dependencies
-sudo apt-get install libglfw3-dev libgles2-mesa-dev
+`sudo apt-get install libglfw3-dev libgles2-mesa-dev`
 
 # /opt/vc/include missing
-https://github.com/raspberrypi/firmware.git
+```
+git clone https://github.com/raspberrypi/firmware.git
+sudo cp -r firmware/opt/vc /opt
+```
