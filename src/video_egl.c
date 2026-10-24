@@ -1,12 +1,15 @@
 /* -*- Mode: c; tab-width: 4; c-basic-offset: 4; indent-tabs-mode: nil; -*- */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 
 #include <GLES2/gl2.h>
 #include <EGL/egl.h>
 #include <bcm_host.h>
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
 
 typedef struct {
     DISPMANX_ELEMENT_HANDLE_T element;
@@ -26,6 +29,8 @@ struct VideoEGL_ {
     EGLSurface surface;
     EGLContext context;
     EGLConfig config;
+    Display *x11_display;
+    Window x11_window;
     EGL_DISPMANX_WINDOW_T native_window;
 };
 
@@ -81,8 +86,21 @@ int VideoEGL_Construct(VideoEGL *ve)
     EGLConfig config;
     EGLBoolean r;
 
-    display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    memset(ve, 0, sizeof(*ve));
+
+    if (getenv("DISPLAY")) {
+        ve->x11_display = XOpenDisplay(NULL);
+        if (ve->x11_display) {
+            display = eglGetDisplay((EGLNativeDisplayType)ve->x11_display);
+        } else {
+            display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        }
+    } else {
+        display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    }
+
     if (display == EGL_NO_DISPLAY) {
+        fprintf(stderr, "VideoEGL_Construct: eglGetDisplay returned EGL_NO_DISPLAY\r\n");
         return 1;
     }
 
@@ -91,16 +109,21 @@ int VideoEGL_Construct(VideoEGL *ve)
     case EGL_TRUE:
         break;                  /* ok */
     case EGL_FALSE:
+        fprintf(stderr, "VideoEGL_Construct: eglInitialize returned EGL_FALSE (error 0x%x)\r\n", eglGetError());
         return 2;
     case EGL_BAD_DISPLAY:
+        fprintf(stderr, "VideoEGL_Construct: eglInitialize returned EGL_BAD_DISPLAY\r\n");
         return 3;
     case EGL_NOT_INITIALIZED:
+        fprintf(stderr, "VideoEGL_Construct: eglInitialize returned EGL_NOT_INITIALIZED\r\n");
         return 4;
     default:
         assert(0);
     }
 
     PrintEGLConfigAttrib(display);
+
+    ve->display = display;
 
     {
         EGLint num;
@@ -115,7 +138,7 @@ int VideoEGL_Construct(VideoEGL *ve)
         };
         r = eglChooseConfig(display, config_attrib_list, &config, 1, &num);
         if (r != EGL_TRUE) {
-            eglTerminate(ve->display);
+            eglTerminate(display);
             return 5;
         }
         /* printf("eglChooseConfig: %d\r\n", num); */
@@ -128,41 +151,92 @@ int VideoEGL_Construct(VideoEGL *ve)
         };
         context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attrib_list);
         if (context == 0) {
-            eglTerminate(ve->display);
+            eglTerminate(display);
             return 6;
         }
     }
 
-    ve->display = display;
     ve->context = context;
     ve->surface = 0;
     ve->config = config;
-    memset(&ve->native_window, 0, sizeof(ve->native_window));
     return 0;
 }
 
 void VideoEGL_Destruct(VideoEGL *ve)
 {
-    eglDestroyContext(ve->display, ve->context);
-    eglTerminate(ve->display);
+    VideoEGL_DestroySurface(ve);
+    if (ve->context) {
+        eglDestroyContext(ve->display, ve->context);
+        ve->context = 0;
+    }
+    if (ve->display) {
+        eglTerminate(ve->display);
+        ve->display = 0;
+    }
+    if (ve->x11_display) {
+        XCloseDisplay(ve->x11_display);
+        ve->x11_display = NULL;
+    }
     memset(ve, 0, sizeof(*ve));
 }
 
 int VideoEGL_CreateSurface(VideoEGL *ve, unsigned int native_window_element, int width, int height)
 {
-    EGL_DISPMANX_WINDOW_T *nw;
-    nw = &ve->native_window;
-    nw->element = (DISPMANX_ELEMENT_HANDLE_T)native_window_element;
-    nw->width = width;
-    nw->height = height;
-    ve->surface = eglCreateWindowSurface(ve->display, ve->config, (EGLNativeWindowType)nw, NULL);
+    if (ve->x11_display) {
+        int screen = DefaultScreen(ve->x11_display);
+        Window root = RootWindow(ve->x11_display, screen);
+        EGLint visual_id = 0;
+        eglGetConfigAttrib(ve->display, ve->config, EGL_NATIVE_VISUAL_ID, &visual_id);
+
+        if (visual_id != 0) {
+            XVisualInfo vinfo_template;
+            int num_visuals = 0;
+            vinfo_template.visualid = visual_id;
+            XVisualInfo *vinfo = XGetVisualInfo(ve->x11_display, VisualIDMask, &vinfo_template, &num_visuals);
+            if (vinfo) {
+                Colormap colormap = XCreateColormap(ve->x11_display, root, vinfo->visual, AllocNone);
+                XSetWindowAttributes swa;
+                swa.colormap = colormap;
+                swa.background_pixmap = None;
+                swa.border_pixel = 0;
+                swa.event_mask = StructureNotifyMask | ExposureMask | KeyPressMask;
+                ve->x11_window = XCreateWindow(ve->x11_display, root, 0, 0, width, height, 0,
+                                               vinfo->depth, InputOutput, vinfo->visual,
+                                               CWBorderPixel | CWColormap | CWEventMask, &swa);
+                XFree(vinfo);
+            }
+        }
+        if (!ve->x11_window) {
+            ve->x11_window = XCreateSimpleWindow(ve->x11_display, root, 0, 0, width, height, 0, 0, 0);
+        }
+        XStoreName(ve->x11_display, ve->x11_window, "PiJockey");
+        XMapWindow(ve->x11_display, ve->x11_window);
+        XFlush(ve->x11_display);
+        ve->surface = eglCreateWindowSurface(ve->display, ve->config, (EGLNativeWindowType)ve->x11_window, NULL);
+    } else {
+        EGL_DISPMANX_WINDOW_T *nw;
+        nw = &ve->native_window;
+        nw->element = (DISPMANX_ELEMENT_HANDLE_T)native_window_element;
+        nw->width = width;
+        nw->height = height;
+        ve->surface = eglCreateWindowSurface(ve->display, ve->config, (EGLNativeWindowType)nw, NULL);
+    }
+    if (ve->surface == EGL_NO_SURFACE) {
+        return 1;
+    }
     return 0;
 }
 
 void VideoEGL_DestroySurface(VideoEGL *ve)
 {
-    eglDestroySurface(ve->display, ve->surface);
-    ve->surface = 0;
+    if (ve->surface) {
+        eglDestroySurface(ve->display, ve->surface);
+        ve->surface = 0;
+    }
+    if (ve->x11_display && ve->x11_window) {
+        XDestroyWindow(ve->x11_display, ve->x11_window);
+        ve->x11_window = 0;
+    }
 }
 
 int VideoEGL_MakeCurrent(VideoEGL *ve)
@@ -181,6 +255,9 @@ int VideoEGL_SwapBuffers(VideoEGL *ve)
 {
     EGLBoolean r;
     r = eglSwapBuffers(ve->display, ve->surface);
+    if (ve->x11_display) {
+        XFlush(ve->x11_display);
+    }
     switch (r) {
     case EGL_TRUE:
         return 0;

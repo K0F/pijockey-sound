@@ -29,12 +29,14 @@ ifeq ($(HAS_BCM_HOST),1)
 LIBS =-lbcm_host
 LIBS+=-lEGL
 LIBS+=-lGLESv2
+LIBS+=-lX11
 LIBS+=-lm
 else
 INCLUDE+=-Icompat
 SOURCES+=bcm_host_compat.c
 LIBS =-lEGL
 LIBS+=-lGLESv2
+LIBS+=-lX11
 LIBS+=-lm
 endif
 

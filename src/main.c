@@ -74,7 +74,16 @@ int main(int argc, char *argv[])
     } else {
         PJContext *pj;
         pj = malloc(PJContext_InstanceSize());
-        PJContext_Construct(pj);
+        if (!pj) {
+            fprintf(stderr, "Out of memory allocating PJContext\r\n");
+            PJContext_HostDeinitialize();
+            return EXIT_FAILURE;
+        }
+        if (PJContext_Construct(pj) != 0) {
+            free(pj);
+            PJContext_HostDeinitialize();
+            return EXIT_FAILURE;
+        }
         if (PJContext_ParseArgs(pj, argc, (const char **)argv) == 0) {
             ret = PJContext_Main(pj);
         }

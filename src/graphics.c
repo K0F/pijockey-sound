@@ -14,6 +14,7 @@
 #include <assert.h>
 
 #include <bcm_host.h>
+#include <EGL/egl.h>
 #include <GLES2/gl2.h>
 
 #include "config.h"
@@ -428,6 +429,7 @@ Graphics *Graphics_Create(Graphics_LAYOUT layout,
                                 &x, &y, &width, &height);
         if (Video_ConstructWindow(v, Video_DEVICE_ID_MAIN_LCD,
                                   x, y, width, height, 0)) {
+            fprintf(stderr, "Graphics_Create: Video_ConstructWindow failed (screen: %dx%d)\r\n", screen_width, screen_height);
             goto damn;
         }
         scaled_width = width;
@@ -446,6 +448,7 @@ Graphics *Graphics_Create(Graphics_LAYOUT layout,
 
     }
     if (VideoEGL_Construct(ve)) {
+        fprintf(stderr, "Graphics_Create: VideoEGL_Construct failed\r\n");
         Video_DestructWindow(v);
         goto damn;
     }
@@ -453,6 +456,7 @@ Graphics *Graphics_Create(Graphics_LAYOUT layout,
     {
         unsigned int native_window_element = Video_GetNativeWindowElement(v);
         if (VideoEGL_CreateSurface(ve, native_window_element, scaled_width, scaled_height)) {
+            fprintf(stderr, "Graphics_Create: VideoEGL_CreateSurface failed (error 0x%x)\r\n", eglGetError());
             VideoEGL_Destruct(ve);
             Video_DestructWindow(v);
             goto damn;
@@ -460,6 +464,7 @@ Graphics *Graphics_Create(Graphics_LAYOUT layout,
     }
 
     if (VideoEGL_MakeCurrent(ve)) {
+        fprintf(stderr, "Graphics_Create: VideoEGL_MakeCurrent failed (error 0x%x)\r\n", eglGetError());
         VideoEGL_DestroySurface(ve);
         VideoEGL_Destruct(ve);
         Video_DestructWindow(v);
@@ -626,7 +631,7 @@ int Graphics_AppendRenderLayer(Graphics *g,
 {
     RenderLayer *layer;
 
-    if (g->num_render_layer >= MAX_RENDER_LAYER) {
+    if (!g || g->num_render_layer >= MAX_RENDER_LAYER) {
         return 1;
     }
 

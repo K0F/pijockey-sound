@@ -6,6 +6,7 @@
 #include <assert.h>
 
 #include <bcm_host.h>
+#include <X11/Xlib.h>
 
 #include "config.h"
 #include "base.h"
@@ -40,10 +41,24 @@ static void EndUpdate(DISPMANX_UPDATE_HANDLE_T update)
 
 int Video_GetScreenSize(Video_DEVICE_ID device_id, int *out_width, int *out_height)
 {
-    uint32_t width;
-    uint32_t height;
+    if (getenv("DISPLAY")) {
+        Display *d = XOpenDisplay(NULL);
+        if (d) {
+            int s = DefaultScreen(d);
+            *out_width = DisplayWidth(d, s);
+            *out_height = DisplayHeight(d, s);
+            XCloseDisplay(d);
+            return 0;
+        }
+    }
+    uint32_t width = 0;
+    uint32_t height = 0;
     graphics_get_display_size(VideoDeviceIdToDispmanxId(device_id),
                               &width, &height);
+    if (width == 0 || height == 0) {
+        width = 1920;
+        height = 1080;
+    }
     *out_width = (int)width;
     *out_height = (int)height;
     return 0;
@@ -62,30 +77,31 @@ int Video_ConstructWindow(Video *v,
     int dispmanx_device_id;
     VC_RECT_T dest_rect;
     VC_RECT_T src_rect;
-    DISPMANX_DISPLAY_HANDLE_T display;
-    DISPMANX_ELEMENT_HANDLE_T element;
+    DISPMANX_DISPLAY_HANDLE_T display = 0;
+    DISPMANX_ELEMENT_HANDLE_T element = 0;
     DISPMANX_UPDATE_HANDLE_T update;
 
     vc_dispmanx_rect_set(&dest_rect, x, y, width, height);
     vc_dispmanx_rect_set(&src_rect, 0, 0, width << 16, height << 16);
 
     update = StartUpdate();
-    if (update == DISPMANX_NO_HANDLE) {
+    if (update != DISPMANX_NO_HANDLE) {
+        dispmanx_device_id = VideoDeviceIdToDispmanxId(device_id);
+        display = vc_dispmanx_display_open(dispmanx_device_id);
+        element = vc_dispmanx_element_add(update,
+                                          display,
+                                          layer,
+                                          &dest_rect,
+                                          (DISPMANX_RESOURCE_HANDLE_T)0,
+                                          &src_rect,
+                                          DISPMANX_PROTECTION_NONE,
+                                          (VC_DISPMANX_ALPHA_T *)NULL,
+                                          (DISPMANX_CLAMP_T *)NULL,
+                                          DISPMANX_NO_ROTATE);
+        EndUpdate(update);
+    } else if (!getenv("DISPLAY")) {
         return 1;
     }
-    dispmanx_device_id = VideoDeviceIdToDispmanxId(device_id);
-    display = vc_dispmanx_display_open(dispmanx_device_id);
-    element = vc_dispmanx_element_add(update,
-                                      display,
-                                      layer,
-                                      &dest_rect,
-                                      (DISPMANX_RESOURCE_HANDLE_T)0,
-                                      &src_rect,
-                                      DISPMANX_PROTECTION_NONE,
-                                      (VC_DISPMANX_ALPHA_T *)NULL,
-                                      (DISPMANX_CLAMP_T *)NULL,
-                                      DISPMANX_NO_ROTATE);
-    EndUpdate(update);
 
     v->dispmanx.display = display;
     v->dispmanx.element = element;
@@ -96,16 +112,14 @@ int Video_ConstructWindow(Video *v,
 
 void Video_DestructWindow(Video *v)
 {
-    DISPMANX_UPDATE_HANDLE_T update;
-
-    update = StartUpdate();
-    if (update == DISPMANX_NO_HANDLE) {
-        assert(0);
+    if (v->dispmanx.display || v->dispmanx.element) {
+        DISPMANX_UPDATE_HANDLE_T update = StartUpdate();
+        if (update != DISPMANX_NO_HANDLE) {
+            vc_dispmanx_element_remove(update, v->dispmanx.element);
+            vc_dispmanx_display_close(v->dispmanx.display);
+            EndUpdate(update);
+        }
     }
-    vc_dispmanx_element_remove(update, v->dispmanx.element);
-    vc_dispmanx_display_close(v->dispmanx.display);
-    EndUpdate(update);
-
     memset(v, 0, sizeof(*v));
 }
 
@@ -128,6 +142,10 @@ int Video_ApplyChange(Video *v)
 {
     int ret;
     DISPMANX_UPDATE_HANDLE_T update;
+
+    if (!v->dispmanx.element) {
+        return 0;
+    }
 
     /* value from interface/vmcs_host/vc_vchi_dispmanx.h */
     const uint32_t ELEMENT_CHANGE_DEST_RECT = (1 << 2);
