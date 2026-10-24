@@ -34,16 +34,10 @@ typedef struct {
     int denom;
 } Scaling;
 
-// to catch the net_input from pj.c
-typedef struct linked_list {
-    float val;
-    struct linked_list *next;
-} dyn_val;
-
 // GLuint net_input
-typedef struct linked_list {
+typedef struct gl_linked_list {
     GLuint val;
-    struct linked_list *next;
+    struct gl_linked_list *next;
 } GLdyn_val;
 
 
@@ -56,7 +50,7 @@ struct RenderLayer_ {
     GLuint framebuffer;
     struct {
         GLuint vertex_coord;
-        GLdyn_val net_input;
+        GLdyn_val *net_input;
         GLuint mouse;
         GLuint time;
         GLuint resolution;
@@ -190,8 +184,20 @@ static int RenderLayer_Construct(RenderLayer *layer,
     return (layer->fragment_shader == 0) ? 1 : 0;
 }
 
+static void RenderLayer_FreeNetInput(RenderLayer *layer)
+{
+    GLdyn_val *curr = layer->attr.net_input;
+    while (curr) {
+        GLdyn_val *tmp = curr->next;
+        free(curr);
+        curr = tmp;
+    }
+    layer->attr.net_input = NULL;
+}
+
 static void RenderLayer_Destruct(RenderLayer *layer)
 {
+    RenderLayer_FreeNetInput(layer);
     glDeleteProgram(layer->program);
     layer->program = 0;
     glDeleteShader(layer->fragment_shader);
@@ -310,15 +316,15 @@ static void RenderLayer_DeallocateOffscreen(RenderLayer *layer)
 
 static int RenderLayer_BuildProgram(RenderLayer *layer,
                                     GLuint vertex_shader,
-                                    GLuint array_buffer_fullscene_quad
-				    GLuint net_params)
+                                    GLuint array_buffer_fullscene_quad,
+                                    GLuint net_params)
 {
     GLint param;
     GLuint new_program;
     GLdyn_val *current=NULL;
     GLdyn_val *next=NULL;
     GLuint i;
-    char[5] name; /* MAX 99 ! */
+    char name[16]; /* MAX 99 ! */
 
     CHECK_GL();
     glCompileShader(layer->fragment_shader);
@@ -345,15 +351,17 @@ static int RenderLayer_BuildProgram(RenderLayer *layer,
     layer->attr.time = glGetUniformLocation(layer->program, "time");
    
     /* Gets m_(0-net_params) adresses */
+    RenderLayer_FreeNetInput(layer);
     i = 0;
     while (i < net_params) {
-        current=malloc(sizeof(GLdyn_val));
+        current = malloc(sizeof(GLdyn_val));
         current->next = next;
         next = current;
-        sprintf(name, "m_%d", i);
+        snprintf(name, sizeof(name), "m_%u", i);
         current->val = glGetUniformLocation(layer->program, name);
         i++; 
     }
+    layer->attr.net_input = current;
 
     layer->attr.mouse = glGetUniformLocation(layer->program, "mouse");
     layer->attr.resolution = glGetUniformLocation(layer->program, "resolution");
@@ -752,78 +760,43 @@ int Graphics_BuildRenderLayer(Graphics *g, int layer_index)
 {
     RenderLayer_BuildProgram(&g->render_layer[layer_index],
                              g->vertex_shader,
-                             g->array_buffer_fullscene_quad
-			     g->net_params);
+                             g->array_buffer_fullscene_quad,
+                             g->net_params);
     /* TODO: handle error */
     return 0;
 }
 
 void Graphics_SetUniforms(Graphics *g, double t,
-			  dyn_val net_input,
+			  dyn_val *net_input,
                           double mouse_x, double mouse_y,
                           double randx, double randy)
 {
-    int i,j;
+    int i;
     int width, height;
-    dyn_val *next=NULL;
-    dyn_val *current=NULL;
 
     CHECK_GL();
     Video_GetSourceSize(g->video, &width, &height);
     for (i = 0; i < g->num_render_layer; i++) {
         RenderLayer *p;
+        GLdyn_val *curr_loc;
+        dyn_val *curr_val;
+
         p = &g->render_layer[i];
         glUseProgram(p->program);
         glUniform1f(p->attr.time, t);
         glUniform2f(p->attr.resolution, (double)width, (double)height);
 
-	//net_input
-        j = 0;
-        /* check not only for net_params but also if the next isnt NULL */
-        /* WHAT A MESS */
-        next = net_input;
-	while (j < g->net_params) {
-		//get net_input_val = actual data to be written into glsl
-               //get net_input_addr = adrress to write to
-               // write like: glUniform1f(net_input_addr, net_input_val);(
-		// advance	current_val = current_val->next;
-               // advance	current_addr = current_addr->next; 
-              // j++
-	}
+        // net_input
+        curr_loc = p->attr.net_input;
+        curr_val = net_input;
+        while (curr_loc != NULL && curr_val != NULL) {
+            glUniform1f(curr_loc->val, curr_val->val);
+            curr_loc = curr_loc->next;
+            curr_val = curr_val->next;
+        }
 
-        
-/*
-	// SOUND
-        glUniform1f(p->attr.sa, snd_a);
-        glUniform1f(p->attr.sb, snd_b);
-        glUniform1f(p->attr.sc, snd_c);
-        glUniform1f(p->attr.sd, snd_d);
-        glUniform1f(p->attr.se, snd_e);
-        glUniform1f(p->attr.sf, snd_f);
-        glUniform1f(p->attr.sg, snd_g);
-        glUniform1f(p->attr.sh, snd_h);
-	// BANG
-	glUniform4f(p->attr.bng, bng_a, bng_b, bng_c, bng_d);
-	// KONTROL
-	glUniform4f(p->attr.knt1, knt_a, knt_b, knt_c, knt_d);
-        glUniform4f(p->attr.knt2, knt_e, knt_f, knt_g, knt_h);
         glUniform2f(p->attr.mouse, mouse_x, mouse_y);
         glUniform2f(p->attr.rand, randx, randy);
-	// GLOBAL
-        glUniform4f(p->attr.glb, glb_a, glb_b, glb_c, glb_d);
-
-	// MEMORY
-        glUniform4f(p->attr.scn0_a, scn0_a, scn0_b, scn0_c, scn0_d);
-        glUniform4f(p->attr.scn0_b, scn0_e, scn0_f, scn0_g, scn0_h);
-	glUniform4f(p->attr.scn1_a, scn1_a, scn1_b, scn1_c, scn1_d);
-	glUniform4f(p->attr.scn1_b, scn1_e, scn1_f, scn1_g, scn1_h);
-	glUniform4f(p->attr.scn2_a, scn2_a, scn2_b, scn2_c, scn2_d);
-	glUniform4f(p->attr.scn2_b, scn2_e, scn2_f, scn2_g, scn2_h);
-        glUniform4f(p->attr.scn3_a, scn3_a, scn3_b, scn3_c, scn3_d);
-        glUniform4f(p->attr.scn3_b, scn3_e, scn3_f, scn3_g, scn3_h);
-        glUniform4f(p->attr.scn4_a, scn4_a, scn4_b, scn4_c, scn4_d);
-        glUniform4f(p->attr.scn4_b, scn4_e, scn4_f, scn4_g, scn4_h);
-*/
 
         glUseProgram(0);
     }
@@ -902,7 +875,7 @@ void Graphics_Render(Graphics *g)
     VideoEGL_SwapBuffers(g->video_egl);
 }
 
-void Graphics_SetBackbuffe(Graphics *g, int enable)
+void Graphics_SetBackbuffer(Graphics *g, int enable)
 {
     g->enable_backbuffer = enable;
 }

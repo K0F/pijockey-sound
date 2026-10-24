@@ -4,8 +4,15 @@
 #include <string.h>
 #include <assert.h>
 
-#include <GLES/gl.h>
+#include <GLES2/gl2.h>
 #include <EGL/egl.h>
+#include <bcm_host.h>
+
+typedef struct {
+    DISPMANX_ELEMENT_HANDLE_T element;
+    int width;
+    int height;
+} EGL_DISPMANX_WINDOW_T;
 
 #include "config.h"
 #include "base.h"
@@ -148,7 +155,7 @@ int VideoEGL_CreateSurface(VideoEGL *ve, unsigned int native_window_element, int
     nw->element = (DISPMANX_ELEMENT_HANDLE_T)native_window_element;
     nw->width = width;
     nw->height = height;
-    ve->surface = eglCreateWindowSurface(ve->display, ve->config, nw, NULL);
+    ve->surface = eglCreateWindowSurface(ve->display, ve->config, (EGLNativeWindowType)nw, NULL);
     return 0;
 }
 

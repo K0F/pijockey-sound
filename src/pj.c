@@ -50,11 +50,6 @@ typedef struct {
     time_t last_modify_time;
 } SourceObject;
 
-typedef struct linked_list {
-    float val;
-    struct linked_list *next;
-} dyn_val;
-
 struct PJContext_ {
     Graphics *graphics;
     Graphics_LAYOUT layout_backup;
@@ -63,6 +58,7 @@ struct PJContext_ {
     int use_tcp;
     int use_net;
     int port;
+    int params;
     struct {
         int x, y;
         int fd;
@@ -95,9 +91,10 @@ static int maxfd;
 static int sockfd;
 static int protocol;
 
-static void sockerror(char *s);
+static void sockerror(const char *s);
 static void x_closesocket(int fd);
 static void dopoll(PJContext *pj);
+void udpmakeoutput(char *buf, PJContext *pj);
 #define BUFSIZE 8192
 
 
@@ -198,7 +195,7 @@ void udpmakeoutput(char *buf, PJContext *pj) {
         i++;
     }
 
-    p = &line;
+    p = line;
 
     // make sure this wont go beyond declared memory range
     while ((val = strsep(&p, " ")) != NULL) {
@@ -262,7 +259,7 @@ static void tcpread(t_fdpoll *x, PJContext *pj)
     else tcpmakeoutput(x, inbuf, ret, pj);
 }
 
-static void sockerror(char *s)
+static void sockerror(const char *s)
 {
     int err = errno;
     fprintf(stderr, "%s: %s (%d)\n", s, strerror(err), err);
@@ -408,7 +405,7 @@ void PJContext_Listen(int use_tcp, int port)
         {   
             sockerror("bind");
             x_closesocket(sockfd);
-            return (0);
+            return;
         }
         if (listen(sockfd, 5) < 0)
         {
@@ -434,7 +431,7 @@ void PJContext_Listen(int use_tcp, int port)
         {   
             sockerror("bind");
             x_closesocket(sockfd);
-            return (0);
+            return;
         }
     }
 }
@@ -810,9 +807,8 @@ int PJContext_ParseArgs(PJContext *pj, int argc, const char *argv[])
             pj->port = strtol(argv[i+1], NULL, 10);
             i++;
         } else if (strcmp(arg, "--params") == 0) {
-            pj->params= strtof(argv[i+1], NULL, 10);
+            pj->params= strtol(argv[i+1], NULL, 10);
 	    i++;
-        }
         } else {
             printf("layer %d: %s\r\n", layer, arg);
             PJContext_AppendLayer(pj, arg);

@@ -91,12 +91,13 @@ RenderLayer *Graphics_GetRenderLayer(Graphics *g, int layer_index);
 int Graphics_BuildRenderLayer(Graphics *g, int layer_index);
 
 void Graphics_SetUniforms(Graphics *g, double t,
-			  dyn_val net_input,
+			  dyn_val *net_input,
                           double mouse_x, double mouse_y,
                           double random_x, double random_y);
 void Graphics_Render(Graphics *g);
 
 void Graphics_SetBackbuffer(Graphics *g, int enable);
+void Graphics_SetNetParams(Graphics *g, int params);
 Graphics_LAYOUT Graphics_GetCurrentLayout(Graphics *g);
 Graphics_LAYOUT Graphics_GetLayout(Graphics_LAYOUT layout, int forward);
 void Graphics_GetWindowSize(Graphics *g, int *out_width, int *out_height);
