@@ -338,6 +338,7 @@ static SourceObject *SourceObject_Create(const char *path)
     so = malloc(sizeof(*so));
     so->path = path;
     so->last_modify_time = 0;
+    GetLastFileModifyTime(path, &so->last_modify_time);
     return so;
 }
 
@@ -350,18 +351,19 @@ static void SourceObject_Delete(void *so)
 int PJContext_Construct(PJContext *pj)
 {
     int scaling_numer, scaling_denom;
+    /* Full 1:1 hardware native resolution for maximum BCM2711 / V3D quality */
     scaling_numer = 1;
-    scaling_denom = 2;
-    pj->graphics = Graphics_Create(Graphics_LAYOUT_RIGHT_TOP,
+    scaling_denom = 1;
+    pj->graphics = Graphics_Create(Graphics_LAYOUT_FULLSCREEN,
                                    scaling_numer, scaling_denom);
     if (!pj->graphics) {
         fprintf(stderr, "Graphics Initialize failed.\r\n");
-        fprintf(stderr, "Ensure an X11 server or valid display is active (e.g. DISPLAY=:0) and GPU has CMA headroom.\r\n");
+        fprintf(stderr, "Ensure DRM/KMS or X11 is accessible and GPU has CMA headroom.\r\n");
         return 2;
     }
 
-    pj->layout_backup = Graphics_LAYOUT_FULLSCREEN;
-    pj->is_fullscreen = 0;
+    pj->layout_backup = Graphics_LAYOUT_RIGHT_TOP;
+    pj->is_fullscreen = 1;
     pj->use_backbuffer = 0;
     pj->use_tcp = 0;
     pj->use_net = 0;
@@ -522,33 +524,31 @@ static int PJContext_ReloadAndRebuildShadersIfNeed(PJContext *pj)
     int i;
     RenderLayer *layer;
 
-    /* PJDebug(pj, ("PJContext_ReloadAndRebuildShadersIfNeed\r\n")); */
     for (i = 0; (layer = Graphics_GetRenderLayer(pj->graphics, i)) != NULL; i++) {
         time_t t;
         SourceObject *so;
         so = RenderLayer_GetAux(layer);
         if (GetLastFileModifyTime(so->path, &t)) {
-            fprintf(stderr, "file open failed: %s\r\n", so->path);
             continue;
         }
         if (so->last_modify_time != t) {
-            FILE *fp;
-            fp = fopen(so->path, "r");
+            FILE *fp = fopen(so->path, "r");
             if (fp == NULL) {
-                fprintf(stderr, "file open failed: %s\r\n", so->path);
+                fprintf(stderr, "\r\n[live-code] File open failed: %s\r\n", so->path);
             } else {
                 size_t len;
-                char code[MAX_SOURCE_BUF]; /* hmm.. */
+                char code[MAX_SOURCE_BUF];
                 errno = 0;
                 len = fread(code, 1, sizeof(code), fp);
-                /* TODO: handle errno */
                 if (ferror(fp) != 0) {
                     PJDebug(pj, ("ferror = %d\r\n", ferror(fp)));
                 }
+                fclose(fp);
                 if (errno != 0) {
                     PJDebug(pj, ("errno = %d\r\n", errno));
                 }
-                PJDebug(pj, ("update: %s\r\n", so->path));
+                printf("\r\n[live-code] Reloading shader '%s'...\r\n", so->path);
+                fflush(stdout);
                 RenderLayer_UpdateShaderSource(layer, code, (int)len);
                 so->last_modify_time = t;
                 Graphics_BuildRenderLayer(pj->graphics, i);
@@ -686,7 +686,8 @@ static int PJContext_PrepareMainLoop(PJContext *pj)
 static void PJContext_MainLoop(PJContext *pj)
 {
     /* start in fullscreen mode */
-    PJContext_SwitchFullscreen(pj); 
+    PJContext_ChangeLayout(pj, Graphics_LAYOUT_FULLSCREEN);
+    pj->is_fullscreen = 1;
     for (;;) {
         switch (getchar()) {
         case 'Q':

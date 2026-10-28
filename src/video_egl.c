@@ -8,9 +8,15 @@
 
 #include <GLES2/gl2.h>
 #include <EGL/egl.h>
+#include <EGL/eglext.h>
 #include <bcm_host.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+
+#include "config.h"
+#include "base.h"
+#include "video_drm.h"
+#include "video_egl.h"
 
 typedef struct {
     DISPMANX_ELEMENT_HANDLE_T element;
@@ -18,62 +24,24 @@ typedef struct {
     int height;
 } EGL_DISPMANX_WINDOW_T;
 
-#include "config.h"
-#include "base.h"
-#include "video_egl.h"
-
-
-/* #define PRINT_EGLCONFIG_ATTRS*/
+typedef enum {
+    BACKEND_NONE = 0,
+    BACKEND_DRM,
+    BACKEND_X11,
+    BACKEND_DISPMANX
+} VideoBackend;
 
 struct VideoEGL_ {
+    VideoBackend backend;
     EGLDisplay display;
     EGLSurface surface;
     EGLContext context;
     EGLConfig config;
+    VideoDRM drm;
     Display *x11_display;
     Window x11_window;
     EGL_DISPMANX_WINDOW_T native_window;
 };
-
-static void PrintEGLConfigAttrib(EGLDisplay display)
-{
-#ifdef PRINT_EGLCONFIG_ATTRS
-    EGLBoolean r;
-    EGLint num_config;
-    EGLConfig configs[32];
-    int i, j;
-
-    static const struct {
-        const char * const str;
-        EGLint attr;
-    } attrib_pairs[] = {
-        /* full list in http://www.khronos.org/opengles/documentation/opengles1_0/html/eglGetConfigAttrib.html */
-        { "EGL_BUFFER_SIZE", EGL_BUFFER_SIZE },
-        { "EGL_RED_SIZE", EGL_RED_SIZE },
-        { "EGL_GREEN_SIZE", EGL_GREEN_SIZE },
-        { "EGL_BLUE_SIZE", EGL_BLUE_SIZE },
-        { "EGL_ALPHA_SIZE", EGL_ALPHA_SIZE },
-        { "EGL_DEPTH_SIZE", EGL_DEPTH_SIZE },
-        { "EGL_CONFIG_ID", EGL_CONFIG_ID },
-        { "EGL_MAX_PBUFFER_WIDTH", EGL_MAX_PBUFFER_WIDTH },
-        { "EGL_MAX_PBUFFER_HEIGHT", EGL_MAX_PBUFFER_HEIGHT },
-        { "EGL_NATIVE_RENDERABLE", EGL_NATIVE_RENDERABLE }
-    };
-
-    r = eglGetConfigs(display, configs, ARRAY_SIZEOF(configs), &num_config);
-    for (i = 0; i < num_config; i++) {
-        EGLint value;
-        printf("config number: %d\r\n", i);
-        for (j = 0; j < ARRAY_SIZEOF(attrib_pairs); j++) {
-            r = eglGetConfigAttrib(display, configs[i], attrib_pairs[j].attr, &value);
-            printf("  %s: %d\r\n", attrib_pairs[j].str, value);
-        }
-        printf("\r\n");
-    }
-#else
-    (void)display;
-#endif
-}
 
 size_t VideoEGL_InstanceSize(void)
 {
@@ -82,65 +50,84 @@ size_t VideoEGL_InstanceSize(void)
 
 int VideoEGL_Construct(VideoEGL *ve)
 {
-    EGLDisplay display;
-    EGLContext context;
+    EGLDisplay display = EGL_NO_DISPLAY;
+    EGLContext context = EGL_NO_CONTEXT;
     EGLConfig config;
     EGLBoolean r;
+    int backend_chosen = BACKEND_NONE;
 
     memset(ve, 0, sizeof(*ve));
 
-    const char *disp_name = getenv("DISPLAY");
-    if (!disp_name || disp_name[0] == '\0') {
-        disp_name = ":0";
+    /* 1. Prefer native DRM/KMS + GBM directly on the hardware */
+    if (VideoDRM_Init(&ve->drm) == 0) {
+        PFNEGLGETPLATFORMDISPLAYEXTPROC get_platform_display =
+            (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
+        if (get_platform_display) {
+            display = get_platform_display(EGL_PLATFORM_GBM_KHR, ve->drm.gbm, NULL);
+        }
+        if (display == EGL_NO_DISPLAY) {
+            display = eglGetDisplay((EGLNativeDisplayType)ve->drm.gbm);
+        }
+
+        if (display != EGL_NO_DISPLAY && eglInitialize(display, NULL, NULL) == EGL_TRUE) {
+            backend_chosen = BACKEND_DRM;
+            printf("[video] Native DRM/KMS + GBM backend activated\r\n");
+        } else {
+            if (display != EGL_NO_DISPLAY) {
+                eglTerminate(display);
+                display = EGL_NO_DISPLAY;
+            }
+            VideoDRM_Cleanup(&ve->drm);
+        }
     }
 
-    if (!getenv("XAUTHORITY")) {
-        const char *home = getenv("HOME");
-        if (home) {
-            char auth[512];
-            snprintf(auth, sizeof(auth), "%s/.Xauthority", home);
-            if (access(auth, R_OK) == 0) {
-                setenv("XAUTHORITY", auth, 0);
+    /* 2. Fallback to X11 display if DRM is unavailable or DRM master locked by Xorg */
+    if (backend_chosen == BACKEND_NONE) {
+        const char *disp_name = getenv("DISPLAY");
+        if (!disp_name || disp_name[0] == '\0') {
+            disp_name = ":0";
+        }
+
+        if (!getenv("XAUTHORITY")) {
+            const char *home = getenv("HOME");
+            if (home) {
+                char auth[512];
+                snprintf(auth, sizeof(auth), "%s/.Xauthority", home);
+                if (access(auth, R_OK) == 0) {
+                    setenv("XAUTHORITY", auth, 0);
+                }
+            }
+        }
+
+        ve->x11_display = XOpenDisplay(disp_name);
+        if (!ve->x11_display && strcmp(disp_name, ":0") != 0) {
+            ve->x11_display = XOpenDisplay(":0");
+        }
+
+        if (ve->x11_display) {
+            display = eglGetDisplay((EGLNativeDisplayType)ve->x11_display);
+            if (display != EGL_NO_DISPLAY && eglInitialize(display, NULL, NULL) == EGL_TRUE) {
+                backend_chosen = BACKEND_X11;
+                printf("[video] X11 display backend activated\r\n");
             }
         }
     }
 
-    ve->x11_display = XOpenDisplay(disp_name);
-    if (!ve->x11_display && strcmp(disp_name, ":0") != 0) {
-        ve->x11_display = XOpenDisplay(":0");
-    }
-
-    if (ve->x11_display) {
-        display = eglGetDisplay((EGLNativeDisplayType)ve->x11_display);
-    } else {
-        fprintf(stderr, "VideoEGL_Construct: Note: could not connect to X11 display '%s', trying default\r\n", disp_name);
+    /* 3. Fallback to legacy default EGL display (e.g. Dispmanx on old firmware) */
+    if (backend_chosen == BACKEND_NONE) {
         display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        if (display != EGL_NO_DISPLAY && eglInitialize(display, NULL, NULL) == EGL_TRUE) {
+            backend_chosen = BACKEND_DISPMANX;
+            printf("[video] Default EGL backend activated\r\n");
+        }
     }
 
-    if (display == EGL_NO_DISPLAY) {
-        fprintf(stderr, "VideoEGL_Construct: eglGetDisplay returned EGL_NO_DISPLAY\r\n");
+    if (backend_chosen == BACKEND_NONE || display == EGL_NO_DISPLAY) {
+        fprintf(stderr, "VideoEGL_Construct: Failed to initialize any EGL display backend\r\n");
         return 1;
     }
 
-    r = eglInitialize(display, NULL, NULL);
-    switch (r) {
-    case EGL_TRUE:
-        break;                  /* ok */
-    case EGL_FALSE:
-        fprintf(stderr, "VideoEGL_Construct: eglInitialize returned EGL_FALSE (error 0x%x)\r\n", eglGetError());
-        return 2;
-    case EGL_BAD_DISPLAY:
-        fprintf(stderr, "VideoEGL_Construct: eglInitialize returned EGL_BAD_DISPLAY\r\n");
-        return 3;
-    case EGL_NOT_INITIALIZED:
-        fprintf(stderr, "VideoEGL_Construct: eglInitialize returned EGL_NOT_INITIALIZED\r\n");
-        return 4;
-    default:
-        assert(0);
-    }
-
-    PrintEGLConfigAttrib(display);
-
+    ve->backend = backend_chosen;
     ve->display = display;
 
     {
@@ -155,11 +142,12 @@ int VideoEGL_Construct(VideoEGL *ve)
             EGL_NONE
         };
         r = eglChooseConfig(display, config_attrib_list, &config, 1, &num);
-        if (r != EGL_TRUE) {
+        if (r != EGL_TRUE || num < 1) {
+            fprintf(stderr, "VideoEGL_Construct: eglChooseConfig failed\r\n");
+            if (ve->backend == BACKEND_DRM) VideoDRM_Cleanup(&ve->drm);
             eglTerminate(display);
             return 5;
         }
-        /* printf("eglChooseConfig: %d\r\n", num); */
     }
 
     {
@@ -168,14 +156,16 @@ int VideoEGL_Construct(VideoEGL *ve)
             EGL_NONE
         };
         context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attrib_list);
-        if (context == 0) {
+        if (context == EGL_NO_CONTEXT) {
+            fprintf(stderr, "VideoEGL_Construct: eglCreateContext failed\r\n");
+            if (ve->backend == BACKEND_DRM) VideoDRM_Cleanup(&ve->drm);
             eglTerminate(display);
             return 6;
         }
     }
 
     ve->context = context;
-    ve->surface = 0;
+    ve->surface = EGL_NO_SURFACE;
     ve->config = config;
     return 0;
 }
@@ -191,6 +181,9 @@ void VideoEGL_Destruct(VideoEGL *ve)
         eglTerminate(ve->display);
         ve->display = 0;
     }
+    if (ve->backend == BACKEND_DRM) {
+        VideoDRM_Cleanup(&ve->drm);
+    }
     if (ve->x11_display) {
         XCloseDisplay(ve->x11_display);
         ve->x11_display = NULL;
@@ -200,7 +193,13 @@ void VideoEGL_Destruct(VideoEGL *ve)
 
 int VideoEGL_CreateSurface(VideoEGL *ve, unsigned int native_window_element, int width, int height)
 {
-    if (ve->x11_display) {
+    if (ve->backend == BACKEND_DRM) {
+        if (VideoDRM_CreateSurface(&ve->drm, width, height) != 0) {
+            return 1;
+        }
+        ve->surface = eglCreateWindowSurface(ve->display, ve->config,
+                                             (EGLNativeWindowType)ve->drm.gbm_surface, NULL);
+    } else if (ve->backend == BACKEND_X11 && ve->x11_display) {
         int screen = DefaultScreen(ve->x11_display);
         Window root = RootWindow(ve->x11_display, screen);
         EGLint visual_id = 0;
@@ -239,7 +238,9 @@ int VideoEGL_CreateSurface(VideoEGL *ve, unsigned int native_window_element, int
         nw->height = height;
         ve->surface = eglCreateWindowSurface(ve->display, ve->config, (EGLNativeWindowType)nw, NULL);
     }
+
     if (ve->surface == EGL_NO_SURFACE) {
+        fprintf(stderr, "VideoEGL_CreateSurface failed (error 0x%x)\r\n", eglGetError());
         return 1;
     }
     return 0;
@@ -268,28 +269,15 @@ int VideoEGL_UnmakeCurrent(VideoEGL *ve)
     return 0;
 }
 
-
 int VideoEGL_SwapBuffers(VideoEGL *ve)
 {
-    EGLBoolean r;
-    r = eglSwapBuffers(ve->display, ve->surface);
+    if (ve->backend == BACKEND_DRM) {
+        return VideoDRM_SwapBuffers(&ve->drm, ve->display, ve->surface);
+    }
+
+    EGLBoolean r = eglSwapBuffers(ve->display, ve->surface);
     if (ve->x11_display) {
         XFlush(ve->x11_display);
     }
-    switch (r) {
-    case EGL_TRUE:
-        return 0;
-    case EGL_FALSE:
-        return 1;
-    case EGL_BAD_DISPLAY:
-        return 2;
-    case EGL_NOT_INITIALIZED:
-        return 3;
-    case EGL_BAD_SURFACE:
-        return 4;
-    default:
-        assert(0);
-        return 5;
-    }
+    return (r == EGL_TRUE) ? 0 : 1;
 }
-

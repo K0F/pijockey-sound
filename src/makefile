@@ -21,6 +21,7 @@ INCLUDE+=-I/opt/vc/include/interface/vmcs_host/linux
 INCLUDE+=-I/usr/include
 INCLUDE+=-I/usr/include/interface/vcos/pthreads
 INCLUDE+=-I/usr/include/interface/vmcs_host/linux
+INCLUDE+=-I/usr/include/libdrm
 LDFLAGS=-L/opt/vc/lib -L/usr/lib -L/usr/lib/aarch64-linux-gnu -L/usr/lib/arm-linux-gnueabihf
 
 HAS_BCM_HOST := $(shell test -f /usr/include/bcm_host.h -o -f /opt/vc/include/bcm_host.h && echo 1 || echo 0)
@@ -29,6 +30,8 @@ ifeq ($(HAS_BCM_HOST),1)
 LIBS =-lbcm_host
 LIBS+=-lEGL
 LIBS+=-lGLESv2
+LIBS+=-ldrm
+LIBS+=-lgbm
 LIBS+=-lX11
 LIBS+=-lm
 else
@@ -36,12 +39,15 @@ INCLUDE+=-Icompat
 SOURCES+=bcm_host_compat.c
 LIBS =-lEGL
 LIBS+=-lGLESv2
+LIBS+=-ldrm
+LIBS+=-lgbm
 LIBS+=-lX11
 LIBS+=-lm
 endif
 
 TARGET=pj
 
+SOURCES+=video_drm.c
 SOURCES+=main.c
 SOURCES+=pj.c
 SOURCES+=video.c

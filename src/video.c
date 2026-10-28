@@ -12,6 +12,7 @@
 #include "config.h"
 #include "base.h"
 #include "video.h"
+#include "video_drm.h"
 
 struct Video_ {
     struct {
@@ -42,6 +43,12 @@ static void EndUpdate(DISPMANX_UPDATE_HANDLE_T update)
 
 int Video_GetScreenSize(Video_DEVICE_ID device_id, int *out_width, int *out_height)
 {
+    /* Try native DRM hardware KMS first */
+    if (VideoDRM_GetScreenResolution(out_width, out_height) == 0) {
+        return 0;
+    }
+
+    /* Fallback to X11 if DRM not accessible */
     const char *disp_name = getenv("DISPLAY");
     if (!disp_name || disp_name[0] == '\0') {
         disp_name = ":0";
