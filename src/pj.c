@@ -355,11 +355,8 @@ int PJContext_Construct(PJContext *pj)
     pj->graphics = Graphics_Create(Graphics_LAYOUT_RIGHT_TOP,
                                    scaling_numer, scaling_denom);
     if (!pj->graphics) {
-        fprintf(stderr, "Graphics Initialize failed:\r\n");
-        fprintf(stderr, " maybe GPU memory allocation failed\r\n");
-        fprintf(stderr, " modify /boot/config.txt\r\n");
-        fprintf(stderr, "  'gpu_mem_256' or 'gpu_mem_512' assign to more than today:)\r\n");
-        fprintf(stderr, " see: http://elinux.org/RPiconfig#Memory\r\n");
+        fprintf(stderr, "Graphics Initialize failed.\r\n");
+        fprintf(stderr, "Ensure an X11 server or valid display is active (e.g. DISPLAY=:0) and GPU has CMA headroom.\r\n");
         return 2;
     }
 

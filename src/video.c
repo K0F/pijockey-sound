@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <assert.h>
 
 #include <bcm_host.h>
@@ -41,23 +42,42 @@ static void EndUpdate(DISPMANX_UPDATE_HANDLE_T update)
 
 int Video_GetScreenSize(Video_DEVICE_ID device_id, int *out_width, int *out_height)
 {
-    if (getenv("DISPLAY")) {
-        Display *d = XOpenDisplay(NULL);
-        if (d) {
-            int s = DefaultScreen(d);
-            *out_width = DisplayWidth(d, s);
-            *out_height = DisplayHeight(d, s);
-            XCloseDisplay(d);
-            return 0;
+    const char *disp_name = getenv("DISPLAY");
+    if (!disp_name || disp_name[0] == '\0') {
+        disp_name = ":0";
+    }
+
+    if (!getenv("XAUTHORITY")) {
+        const char *home = getenv("HOME");
+        if (home) {
+            char auth[512];
+            snprintf(auth, sizeof(auth), "%s/.Xauthority", home);
+            if (access(auth, R_OK) == 0) {
+                setenv("XAUTHORITY", auth, 0);
+            }
         }
     }
+
+    Display *d = XOpenDisplay(disp_name);
+    if (!d && strcmp(disp_name, ":0") != 0) {
+        d = XOpenDisplay(":0");
+    }
+
+    if (d) {
+        int s = DefaultScreen(d);
+        *out_width = DisplayWidth(d, s);
+        *out_height = DisplayHeight(d, s);
+        XCloseDisplay(d);
+        return 0;
+    }
+
     uint32_t width = 0;
     uint32_t height = 0;
     graphics_get_display_size(VideoDeviceIdToDispmanxId(device_id),
                               &width, &height);
     if (width == 0 || height == 0) {
-        width = 1920;
-        height = 1080;
+        width = 1280;
+        height = 1024;
     }
     *out_width = (int)width;
     *out_height = (int)height;

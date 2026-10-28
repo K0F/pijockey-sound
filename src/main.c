@@ -54,6 +54,21 @@ int main(int argc, char *argv[])
 {
     int ret;
 
+    // Ensure DISPLAY and XAUTHORITY default to local display :0 if not set in environment
+    if (!getenv("DISPLAY") || getenv("DISPLAY")[0] == '\0') {
+        setenv("DISPLAY", ":0", 0);
+    }
+    if (!getenv("XAUTHORITY")) {
+        const char *home = getenv("HOME");
+        if (home) {
+            char auth[512];
+            snprintf(auth, sizeof(auth), "%s/.Xauthority", home);
+            if (access(auth, R_OK) == 0) {
+                setenv("XAUTHORITY", auth, 0);
+            }
+        }
+    }
+
 #ifdef USE_TERMIOS
     struct termios ios_old, ios_new;
 

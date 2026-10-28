@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <assert.h>
 
 #include <GLES2/gl2.h>
@@ -88,14 +89,31 @@ int VideoEGL_Construct(VideoEGL *ve)
 
     memset(ve, 0, sizeof(*ve));
 
-    if (getenv("DISPLAY")) {
-        ve->x11_display = XOpenDisplay(NULL);
-        if (ve->x11_display) {
-            display = eglGetDisplay((EGLNativeDisplayType)ve->x11_display);
-        } else {
-            display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    const char *disp_name = getenv("DISPLAY");
+    if (!disp_name || disp_name[0] == '\0') {
+        disp_name = ":0";
+    }
+
+    if (!getenv("XAUTHORITY")) {
+        const char *home = getenv("HOME");
+        if (home) {
+            char auth[512];
+            snprintf(auth, sizeof(auth), "%s/.Xauthority", home);
+            if (access(auth, R_OK) == 0) {
+                setenv("XAUTHORITY", auth, 0);
+            }
         }
+    }
+
+    ve->x11_display = XOpenDisplay(disp_name);
+    if (!ve->x11_display && strcmp(disp_name, ":0") != 0) {
+        ve->x11_display = XOpenDisplay(":0");
+    }
+
+    if (ve->x11_display) {
+        display = eglGetDisplay((EGLNativeDisplayType)ve->x11_display);
     } else {
+        fprintf(stderr, "VideoEGL_Construct: Note: could not connect to X11 display '%s', trying default\r\n", disp_name);
         display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     }
 
