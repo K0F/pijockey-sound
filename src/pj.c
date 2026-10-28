@@ -775,7 +775,10 @@ int PJContext_ParseArgs(PJContext *pj, int argc, const char *argv[])
     layer = 0;
     for (i = 1; i < argc; i++) {
         const char *arg = argv[i];
-        if (strcmp(arg, "--debug") == 0) {
+        if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0 ||
+            strcmp(arg, "-help") == 0 || strcmp(arg, "help") == 0) {
+            return 1;
+        } else if (strcmp(arg, "--debug") == 0) {
             pj->verbose.debug = 1;
         } else if (strcmp(arg, "--RGB888") == 0) {
             Graphics_SetOffscreenPixelFormat(g, Graphics_PIXELFORMAT_RGB888);

@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -28,6 +29,10 @@ static void PrintCommandUsage(void)
 {
     printf("usage: pj [options] <layer0.glsl> [layer1.glsl] [layer2.glsl] ...\r\n");
     printf("options:\r\n");
+    printf("  help:\r\n");
+    printf("    --help, -h     print this help usage\r\n");
+    printf("  debug:\r\n");
+    printf("    --debug        enable debug printing\r\n");
     printf("  offscreen format:\r\n");
     printf("    --RGB888\r\n");
     printf("    --RGBA8888 (default)\r\n");
@@ -53,10 +58,27 @@ static void PrintCommandUsage(void)
 int main(int argc, char *argv[])
 {
     int ret;
+    int i;
 
     /* Line-buffering / unbuffered output for live terminal and service monitoring */
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+
+    /* Check for help flag or no arguments before initializing display / raw mode */
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0 ||
+            strcmp(argv[i], "-help") == 0 || strcmp(argv[i], "help") == 0) {
+            PrintHead();
+            PrintCommandUsage();
+            return EXIT_SUCCESS;
+        }
+    }
+
+    if (argc == 1) {
+        PrintHead();
+        PrintCommandUsage();
+        return EXIT_SUCCESS;
+    }
 
     // Ensure DISPLAY and XAUTHORITY default to local display :0 if not set in environment
     if (!getenv("DISPLAY") || getenv("DISPLAY")[0] == '\0') {
@@ -91,27 +113,22 @@ int main(int argc, char *argv[])
     PrintHead();
     ret = EXIT_SUCCESS;
 
-    if (argc == 1) {
-        PrintCommandUsage();
-    } else {
-        PJContext *pj;
-        pj = malloc(PJContext_InstanceSize());
-        if (!pj) {
-            fprintf(stderr, "Out of memory allocating PJContext\r\n");
-            PJContext_HostDeinitialize();
-            return EXIT_FAILURE;
-        }
-        if (PJContext_Construct(pj) != 0) {
-            free(pj);
-            PJContext_HostDeinitialize();
-            return EXIT_FAILURE;
-        }
-        if (PJContext_ParseArgs(pj, argc, (const char **)argv) == 0) {
-            ret = PJContext_Main(pj);
-        }
-        PJContext_Destruct(pj);
-        free(pj);
+    PJContext *pj = malloc(PJContext_InstanceSize());
+    if (!pj) {
+        fprintf(stderr, "Out of memory allocating PJContext\r\n");
+        PJContext_HostDeinitialize();
+        return EXIT_FAILURE;
     }
+    if (PJContext_Construct(pj) != 0) {
+        free(pj);
+        PJContext_HostDeinitialize();
+        return EXIT_FAILURE;
+    }
+    if (PJContext_ParseArgs(pj, argc, (const char **)argv) == 0) {
+        ret = PJContext_Main(pj);
+    }
+    PJContext_Destruct(pj);
+    free(pj);
 
     PJContext_HostDeinitialize();
 
