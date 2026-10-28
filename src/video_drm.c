@@ -40,26 +40,42 @@ static int FindConnectedConnector(int fd, drmModeRes *res,
         return 1;
     }
 
-    /* Select preferred mode if available, otherwise first mode */
-    drmModeModeInfo mode = conn->modes[0];
-    for (i = 0; i < conn->count_modes; i++) {
-        if (conn->modes[i].type & DRM_MODE_TYPE_PREFERRED) {
-            mode = conn->modes[i];
-            break;
-        }
-    }
-
     drmModeEncoder *enc = drmModeGetEncoder(fd, conn->encoder_id);
     uint32_t crtc_id = 0;
+    drmModeModeInfo mode;
+    int have_mode = 0;
+
     if (enc) {
         if (enc->crtc_id) {
             crtc_id = enc->crtc_id;
-        } else {
+            drmModeCrtc *c = drmModeGetCrtc(fd, crtc_id);
+            if (c) {
+                if (c->mode_valid) {
+                    mode = c->mode;
+                    have_mode = 1;
+                }
+                drmModeFreeCrtc(c);
+            }
+        }
+        if (!crtc_id) {
             for (j = 0; j < res->count_crtcs; j++) {
                 if (enc->possible_crtcs & (1 << j)) {
                     crtc_id = res->crtcs[j];
                     break;
                 }
+            }
+        }
+    }
+
+    if (!have_mode) {
+        /* Choose mode with highest resolution */
+        int best_area = 0;
+        mode = conn->modes[0];
+        for (i = 0; i < conn->count_modes; i++) {
+            int area = conn->modes[i].hdisplay * conn->modes[i].vdisplay;
+            if (area > best_area) {
+                best_area = area;
+                mode = conn->modes[i];
             }
         }
     }
@@ -139,7 +155,14 @@ int VideoDRM_Init(VideoDRM *drm)
         }
 
         /* Check if we can obtain or hold DRM master */
-        drmSetMaster(fd);
+        if (drmSetMaster(fd) != 0) {
+            fprintf(stderr, "[drm] Notice: drmSetMaster failed on %s (another display server active, falling back to X11)\r\n", s_card_paths[i]);
+            if (enc) drmModeFreeEncoder(enc);
+            drmModeFreeConnector(conn);
+            drmModeFreeResources(res);
+            close(fd);
+            continue;
+        }
 
         drmModeCrtc *saved_crtc = drmModeGetCrtc(fd, crtc_id);
         struct gbm_device *gbm = gbm_create_device(fd);

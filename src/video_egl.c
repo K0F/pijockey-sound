@@ -12,6 +12,7 @@
 #include <bcm_host.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xatom.h>
 
 #include "config.h"
 #include "base.h"
@@ -202,6 +203,11 @@ int VideoEGL_CreateSurface(VideoEGL *ve, unsigned int native_window_element, int
     } else if (ve->backend == BACKEND_X11 && ve->x11_display) {
         int screen = DefaultScreen(ve->x11_display);
         Window root = RootWindow(ve->x11_display, screen);
+        int scr_w = DisplayWidth(ve->x11_display, screen);
+        int scr_h = DisplayHeight(ve->x11_display, screen);
+        if (width <= 0 || width > scr_w) width = scr_w;
+        if (height <= 0 || height > scr_h) height = scr_h;
+
         EGLint visual_id = 0;
         eglGetConfigAttrib(ve->display, ve->config, EGL_NATIVE_VISUAL_ID, &visual_id);
 
@@ -217,17 +223,52 @@ int VideoEGL_CreateSurface(VideoEGL *ve, unsigned int native_window_element, int
                 swa.background_pixmap = None;
                 swa.border_pixel = 0;
                 swa.event_mask = StructureNotifyMask | ExposureMask | KeyPressMask;
-                ve->x11_window = XCreateWindow(ve->x11_display, root, 0, 0, width, height, 0,
+                ve->x11_window = XCreateWindow(ve->x11_display, root, 0, 0, scr_w, scr_h, 0,
                                                vinfo->depth, InputOutput, vinfo->visual,
                                                CWBorderPixel | CWColormap | CWEventMask, &swa);
                 XFree(vinfo);
             }
         }
         if (!ve->x11_window) {
-            ve->x11_window = XCreateSimpleWindow(ve->x11_display, root, 0, 0, width, height, 0, 0, 0);
+            ve->x11_window = XCreateSimpleWindow(ve->x11_display, root, 0, 0, scr_w, scr_h, 0, 0, 0);
         }
+
+        /* 1. Remove all window manager borders/decorations via Motif hints */
+        struct {
+            unsigned long flags;
+            unsigned long functions;
+            unsigned long decorations;
+            long input_mode;
+            unsigned long status;
+        } mwm_hints = { 2, 0, 0, 0, 0 }; /* MWM_HINTS_DECORATIONS = 2, decorations = 0 */
+        Atom prop_mwm = XInternAtom(ve->x11_display, "_MOTIF_WM_HINTS", False);
+        XChangeProperty(ve->x11_display, ve->x11_window, prop_mwm, prop_mwm, 32,
+                        PropModeReplace, (unsigned char *)&mwm_hints, 5);
+
+        /* 2. Set EWMH fullscreen state */
+        Atom net_wm_state = XInternAtom(ve->x11_display, "_NET_WM_STATE", False);
+        Atom net_wm_fullscreen = XInternAtom(ve->x11_display, "_NET_WM_STATE_FULLSCREEN", False);
+        XChangeProperty(ve->x11_display, ve->x11_window, net_wm_state, XA_ATOM, 32,
+                        PropModeReplace, (unsigned char *)&net_wm_fullscreen, 1);
+
         XStoreName(ve->x11_display, ve->x11_window, "PiJockey");
-        XMapWindow(ve->x11_display, ve->x11_window);
+        XMapRaised(ve->x11_display, ve->x11_window);
+        XMoveResizeWindow(ve->x11_display, ve->x11_window, 0, 0, scr_w, scr_h);
+
+        /* 3. Send ClientMessage to root window so WM switches immediately to fullscreen mode */
+        XEvent xev;
+        memset(&xev, 0, sizeof(xev));
+        xev.type = ClientMessage;
+        xev.xclient.window = ve->x11_window;
+        xev.xclient.message_type = net_wm_state;
+        xev.xclient.format = 32;
+        xev.xclient.data.l[0] = 1; /* _NET_WM_STATE_ADD */
+        xev.xclient.data.l[1] = (long)net_wm_fullscreen;
+        xev.xclient.data.l[2] = 0;
+        xev.xclient.data.l[3] = 1;
+        XSendEvent(ve->x11_display, root, False,
+                   SubstructureRedirectMask | SubstructureNotifyMask, &xev);
+
         XFlush(ve->x11_display);
         ve->surface = eglCreateWindowSurface(ve->display, ve->config, (EGLNativeWindowType)ve->x11_window, NULL);
     } else {
