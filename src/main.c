@@ -54,6 +54,10 @@ int main(int argc, char *argv[])
 {
     int ret;
 
+    /* Line-buffering / unbuffered output for live terminal and service monitoring */
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
     // Ensure DISPLAY and XAUTHORITY default to local display :0 if not set in environment
     if (!getenv("DISPLAY") || getenv("DISPLAY")[0] == '\0') {
         setenv("DISPLAY", ":0", 0);
@@ -71,11 +75,14 @@ int main(int argc, char *argv[])
 
 #ifdef USE_TERMIOS
     struct termios ios_old, ios_new;
+    int is_tty = isatty(STDIN_FILENO);
 
-    tcgetattr(STDIN_FILENO, &ios_old);
-    tcgetattr(STDIN_FILENO, &ios_new);
-    cfmakeraw(&ios_new);
-    tcsetattr(STDIN_FILENO, 0, &ios_new);
+    if (is_tty) {
+        tcgetattr(STDIN_FILENO, &ios_old);
+        tcgetattr(STDIN_FILENO, &ios_new);
+        cfmakeraw(&ios_new);
+        tcsetattr(STDIN_FILENO, 0, &ios_new);
+    }
     fcntl(0, F_SETFL, O_NONBLOCK);
 #endif
 
@@ -109,7 +116,9 @@ int main(int argc, char *argv[])
     PJContext_HostDeinitialize();
 
 #ifdef USE_TERMIOS
-    tcsetattr(STDIN_FILENO, 0, &ios_old);
+    if (is_tty) {
+        tcsetattr(STDIN_FILENO, 0, &ios_old);
+    }
 #endif
     return ret;
 }
