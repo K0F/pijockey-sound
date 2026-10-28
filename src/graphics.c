@@ -645,6 +645,7 @@ int Graphics_AppendRenderLayer(Graphics *g,
         return 3;
     }
     g->num_render_layer += 1;
+    Graphics_BuildRenderLayer(g, g->num_render_layer - 1);
     return 0;
 }
 
@@ -787,21 +788,22 @@ void Graphics_SetUniforms(Graphics *g, double t,
         dyn_val *curr_val;
 
         p = &g->render_layer[i];
+        if (!p->program) continue;
         glUseProgram(p->program);
-        glUniform1f(p->attr.time, t);
-        glUniform2f(p->attr.resolution, (double)width, (double)height);
+        if ((GLint)p->attr.time != -1) glUniform1f(p->attr.time, (GLfloat)t);
+        if ((GLint)p->attr.resolution != -1) glUniform2f(p->attr.resolution, (GLfloat)width, (GLfloat)height);
 
         // net_input
         curr_loc = p->attr.net_input;
         curr_val = net_input;
         while (curr_loc != NULL && curr_val != NULL) {
-            glUniform1f(curr_loc->val, curr_val->val);
+            if ((GLint)curr_loc->val != -1) glUniform1f(curr_loc->val, curr_val->val);
             curr_loc = curr_loc->next;
             curr_val = curr_val->next;
         }
 
-        glUniform2f(p->attr.mouse, mouse_x, mouse_y);
-        glUniform2f(p->attr.rand, randx, randy);
+        if ((GLint)p->attr.mouse != -1) glUniform2f(p->attr.mouse, (GLfloat)mouse_x, (GLfloat)mouse_y);
+        if ((GLint)p->attr.rand != -1) glUniform2f(p->attr.rand, (GLfloat)randx, (GLfloat)randy);
 
         glUseProgram(0);
     }
@@ -820,26 +822,30 @@ void Graphics_Render(Graphics *g)
     for (i = 0; i < g->num_render_layer; i++) {
         RenderLayer *p;
         p = &g->render_layer[i];
+        if (!p->program) continue;
         glUseProgram(p->program);
-        if (g->enable_backbuffer) {
+        if (g->enable_backbuffer && (GLint)p->attr.backbuffer != -1) {
             glUniform1i(p->attr.backbuffer, g->backbuffer_texture_unit);
             glActiveTexture(GL_TEXTURE0 + g->backbuffer_texture_unit);
             glBindTexture(GL_TEXTURE_2D, g->backbuffer_texture_object);
         }
-        if (i == 0) {
+        if (g->num_render_layer == 1) {
+            /* Single layer: render directly to screen framebuffer 0 */
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        } else if (i == 0) {
             /* primary layer */
             glBindFramebuffer(GL_FRAMEBUFFER, p->framebuffer);
             glActiveTexture(GL_TEXTURE0 + p->texture_unit);
             glBindTexture(GL_TEXTURE_2D, 0);
         } else if (i == (g->num_render_layer-1)) {
             /* final layer */
-            glUniform1i(p->attr.prev_layer, prev_layer_texture_unit);
+            if ((GLint)p->attr.prev_layer != -1) glUniform1i(p->attr.prev_layer, prev_layer_texture_unit);
             /* TODO: plav_layer_resolution */
             glActiveTexture(GL_TEXTURE0 + prev_layer_texture_unit);
             glBindTexture(GL_TEXTURE_2D, prev_layer_texture_object);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
         } else {
-            glUniform1i(p->attr.prev_layer, prev_layer_texture_unit);
+            if ((GLint)p->attr.prev_layer != -1) glUniform1i(p->attr.prev_layer, prev_layer_texture_unit);
             /* TODO: plav_layer_resolution */
             glActiveTexture(GL_TEXTURE0 + p->texture_unit);
             glBindTexture(GL_TEXTURE_2D, 0);
@@ -849,6 +855,8 @@ void Graphics_Render(Graphics *g)
         }
 
         glBindBuffer(GL_ARRAY_BUFFER, g->array_buffer_fullscene_quad);
+        glEnableVertexAttribArray(p->attr.vertex_coord);
+        glVertexAttribPointer(p->attr.vertex_coord, 4, GL_FLOAT, GL_FALSE, 16, NULL);
         glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
